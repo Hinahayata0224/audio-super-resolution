@@ -248,6 +248,15 @@ def main():
             out = torch.from_numpy(out.squeeze())
         else:
             out = out.squeeze().cpu()
+
+        # P6: 逐 chunk 增益对齐 —— AudioSR 输出按 max|amp| 归一化会改变响度，
+        # 把输出 RMS 对齐回输入 RMS，避免 overlap-add 时 chunk 边界出现增益跳变。
+        if out.shape[0] == ch_mono.shape[0] and ch_mono.abs().sum() > 0:
+            rms_in = ch_mono.square().mean().sqrt().clamp(min=1e-10)
+            rms_out = out.square().mean().sqrt().clamp(min=1e-10)
+            gain = (rms_in / rms_out).clamp(max=4.0)  # 限幅，防止异常放大
+            out = out * gain
+
         print(f"  [{label}] write={t1-t0:.1f}s  sr={t2-t1:.1f}s  total={t2-t0:.1f}s")
         return out
 
@@ -273,33 +282,51 @@ def main():
         hann_full = torch.hann_window(max_chunk_samples)
         ch_outputs = []
 
+        # P3: chunk 并行。AudioSR 的 torch CPU 推理会释放 GIL，线程池可并行；
+        # GPU 上推理本身串行，线程池仅让 I/O 与计算重叠，开销可忽略。
+        from concurrent.futures import ThreadPoolExecutor
+        import os as _os
+        workers = min(max(1, _os.cpu_count() or 1), 8)
+        print(f"  Parallel: {workers} workers")
+
+        # 预收集所有 (ch_idx, i) 的任务，保持 overlap-add 顺序无关（累加可交换）
+        tasks = []  # (ch_idx, i, start, end, ch_mono, label)
         for ch_idx in range(n_channels):
             ch_audio = st1_audio[ch_idx:ch_idx+1]
-            out_accum = torch.zeros(1, total_samples + max_chunk_samples, device='cpu')
-            window_accum = torch.zeros(1, total_samples + max_chunk_samples)
-
             for i in range(n_chunks):
                 start = i * step_samples
                 end = min(start + max_chunk_samples, total_samples)
                 actual_len = end - start
-
                 chunk = ch_audio[:, start:end]
                 if actual_len < max_chunk_samples:
                     chunk = torch.nn.functional.pad(chunk, (0, max_chunk_samples - actual_len))
+                tasks.append((ch_idx, i, start, end, chunk.squeeze(0), f"ch{ch_idx}_blk{i}"))
 
-                chunk_mono = chunk.squeeze(0)
-                ch_label = f"ch{ch_idx}_blk{i}"
-                chunk_out = process_one_channel(chunk_mono, ch_label)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            # 提交并记录 future -> (ch_idx, i, start)
+            futures = {pool.submit(process_one_channel, ch_mono, label): (ch_idx, i, start)
+                       for (ch_idx, i, start, end, ch_mono, label) in tasks}
+            results = {}
+            for fut in futures:
+                ch_idx, i, start = futures[fut]
+                results[(ch_idx, i)] = fut.result()
+            print(f"  All {len(tasks)} chunks done")
 
+        # 顺序累加（结果与串行完全一致）
+        for ch_idx in range(n_channels):
+            out_accum = torch.zeros(1, total_samples + max_chunk_samples, device='cpu')
+            window_accum = torch.zeros(1, total_samples + max_chunk_samples)
+            for i in range(n_chunks):
+                start = i * step_samples
+                chunk_out = results[(ch_idx, i)]
                 if chunk_out.shape[0] > max_chunk_samples:
                     chunk_out = chunk_out[:max_chunk_samples]
                 elif chunk_out.shape[0] < max_chunk_samples:
                     chunk_out = torch.nn.functional.pad(chunk_out, (0, max_chunk_samples - chunk_out.shape[0]))
-
                 window = hann_full[:max_chunk_samples]
                 out_accum[0, start:start + max_chunk_samples] += chunk_out * window
                 window_accum[0, start:start + max_chunk_samples] += window
-                print(f"  Ch {ch_idx+1}/{n_channels} #{i+1}/{n_chunks}: {start/48000:.1f}s - {end/48000:.1f}s")
+                print(f"  Ch {ch_idx+1}/{n_channels} #{i+1}/{n_chunks}: {start/48000:.1f}s - {(start+max_chunk_samples)/48000:.1f}s")
 
             ch_out = out_accum / window_accum.clamp(min=1e-8)
             ch_out = ch_out[:, :total_samples]

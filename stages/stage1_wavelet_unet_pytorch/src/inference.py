@@ -4,8 +4,12 @@ import torch
 
 from .config import SAMPLERATE, SEGMENT_LENGTH
 
+# 每批送入模型的段数。模型为纯 Conv1D，batch 推理可显著提升吞吐，
+# 且各段独立、不改变 overlap-add 的数学结果。
+DEFAULT_BATCH_SIZE = 8
 
-def process_audio(model, audio_np, sr, device="cpu"):
+
+def process_audio(model, audio_np, sr, device="cpu", batch_size=DEFAULT_BATCH_SIZE):
     """Process numpy audio array through the WaveletUNet model.
 
     Args:
@@ -13,6 +17,7 @@ def process_audio(model, audio_np, sr, device="cpu"):
         audio_np: numpy array (samples,) for mono, (samples, channels) for multi-channel
         sr: sample rate of input audio
         device: torch device
+        batch_size: number of 1s segments fed to the model per forward pass
 
     Returns:
         numpy array (samples, channels) at 44.1kHz
@@ -50,19 +55,25 @@ def process_audio(model, audio_np, sr, device="cpu"):
         out_accum = np.zeros(padded_len, dtype=np.float64)
         win_accum = np.zeros(padded_len, dtype=np.float64)
 
+        # Pre-window every chunk once, then run batched forward passes.
+        clips_w = np.stack([
+            ch_data[k * step_samples:k * step_samples + chunk_samples] * window
+            for k in range(n_chunks)
+        ]).astype(np.float32)  # (n_chunks, chunk_samples)
+
         with torch.no_grad():
-            for k in range(n_chunks):
-                start = k * step_samples
-                clip = ch_data[start:start + chunk_samples]
-                clip_w = clip * window
-
-                inp = torch.from_numpy(clip_w).float().unsqueeze(0).unsqueeze(0).to(device)
-                pred = model(inp).squeeze().cpu().numpy()
-
-                out_accum[start:start + chunk_samples] += pred * window
-                win_accum[start:start + chunk_samples] += window * window
+            for b0 in range(0, n_chunks, batch_size):
+                batch = clips_w[b0:b0 + batch_size]  # (B, chunk_samples)
+                inp = torch.from_numpy(batch).unsqueeze(1).to(device)  # (B, 1, chunk_samples)
+                preds = model(inp).squeeze(1).cpu().numpy()  # (B, chunk_samples)
+                for j, pred in enumerate(preds):
+                    k = b0 + j
+                    start = k * step_samples
+                    out_accum[start:start + chunk_samples] += pred * window
+                    win_accum[start:start + chunk_samples] += window * window
 
         out_accum = out_accum / np.maximum(win_accum, 1e-10)
         ch_outputs.append(out_accum[:total])
 
     return np.column_stack(ch_outputs) if n_channels > 1 else ch_outputs[0]
+
