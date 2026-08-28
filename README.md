@@ -10,7 +10,7 @@ MP3/AAC 音频修复与超分辨率管道。将两个开源项目组合成一条
 输入音频 (低质量 MP3/AAC)
     │
     ▼  Stage 1: 小波去伪影 (44.1kHz)
-    │   upscalemp3_v2 —— Wavelet U-Net 去除 MP3 压缩伪影
+    │   Wavelet U-Net 去除 MP3 压缩伪影
     │
     ▼  Stage 2: 超分辨率 (48kHz)
     │   AudioSR —— 基于扩散模型的音频超分
@@ -27,18 +27,23 @@ MP3/AAC 音频修复与超分辨率管道。将两个开源项目组合成一条
 │   ├── compare.py                # 原始/修复音频定量对比（LSD 对数谱距离）
 │   └── verify_port.py            # 验证 PyTorch 移植版与原始 TF 版输出一致性
 │
-├── upscalemp3_v2/                # 【开源项目①】matthewmcq/upscalemp3_v2 (MIT)
-│   │                             # Wavelet U-Net MP3 增强，TensorFlow/Keras 实现
-│   ├── src/                      # 模型、训练、推理（TF）
-│   ├── README.md                 # 原项目文档
-│   └── LICENSE                   # MIT License
+├── stages/                       # 按处理阶段划分的子项目
+│   ├── stage1_wavelet_unet/      # 【开源项目①】matthewmcq/upscalemp3_v2 (MIT)
+│   │   │                         # Wavelet U-Net MP3 增强，TensorFlow/Keras 实现
+│   │   ├── src/                  # 模型、训练、推理（TF）
+│   │   ├── README.md             # 原项目文档
+│   │   └── LICENSE               # MIT License
+│   │
+│   └── stage1_wavelet_unet_pytorch/   # 【移植版】upscalemp3_v2 的 PyTorch 重实现
+│       │                         # 零 TF 依赖，权重从 Keras h5 加载
+│       └── src/                  # config / dwt / blocks / model / inference / weights
 │
-├── audio_decompression/          # 【移植版】upscalemp3_v2 的 PyTorch 重实现
-│   │                             # 零 TF 依赖，权重从 Keras h5 加载
-│   └── src/                      # config / dwt / blocks / model / inference / weights
-│
+├── models/                       # 模型权重缓存（未入库，见"模型下载"）
 └── requirements.txt              # 根目录依赖（Stage 2 AudioSR + 音频处理）
 ```
+
+> `stage1_wavelet_unet/` 是 Stage 1 的 TF/Keras 原始实现，`stage1_wavelet_unet_pytorch/`
+> 是其 PyTorch 移植版（推理管道实际使用移植版）。`stages/` 目录只含代码，不含权重。
 
 ## 快速开始
 
@@ -67,9 +72,9 @@ python scripts/restore.py -i "music.mp3" -o ./out --ddim_steps 100
 放置路径（与代码内默认路径一致）：
 
 ```
-models/audiosr/pytorch_model.bin          # Stage 2
-models/huggingface/roberta-base/...       # Stage 2 文本编码器缓存
-audio_decompression/weights/model_13M.weights.h5   # Stage 1
+models/audiosr/pytorch_model.bin                    # Stage 2
+models/huggingface/roberta-base/...                 # Stage 2 文本编码器缓存
+stages/stage1_wavelet_unet_pytorch/weights/model_13M.weights.h5   # Stage 1
 ```
 
 > AudioSR 权重也可通过 HuggingFace `huggingface-cli download` 或直接运行
@@ -81,11 +86,11 @@ audio_decompression/weights/model_13M.weights.h5   # Stage 1
 
 | 组件 | 原项目 | 许可证 |
 | --- | --- | --- |
-| `upscalemp3_v2/` | [matthewmcq/upscalemp3_v2](https://github.com/matthewmcq/upscalemp3_v2) — Wavelet U-Net MP3 增强 | MIT |
-| `audio_decompression/` | upscalemp3_v2 的 PyTorch 移植（自研封装） | 同 MIT |
+| `stages/stage1_wavelet_unet/` | [matthewmcq/upscalemp3_v2](https://github.com/matthewmcq/upscalemp3_v2) — Wavelet U-Net MP3 增强 | MIT |
+| `stages/stage1_wavelet_unet_pytorch/` | upscalemp3_v2 的 PyTorch 移植（自研封装） | 同 MIT |
 | Stage 2 超分 | [haoheliu/audiosr](https://github.com/haoheliu/audiosr) — Audio Diffusion Super-Resolution | 见原项目 |
 
 ## 备注
 
-- `upscalemp3_v2/` 为原项目文件（含其 LICENSE），未做修改；其内嵌 git 历史已在整理时移除。
+- `stages/stage1_wavelet_unet/` 为原项目文件（含其 LICENSE），未做修改；其内嵌 git 历史已在整理时移除。
 - 使用 `hf-mirror.com` 镜像可加速 HuggingFace 权重下载（`scripts/restore.py` 默认已设置）。

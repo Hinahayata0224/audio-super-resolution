@@ -7,7 +7,7 @@ __pycache__/
 # 模型权重（体积大，需自行从 HuggingFace 下载，见 README）
 models/audiosr/
 models/huggingface/
-audio_decompression/weights/
+stages/stage1_wavelet_unet_pytorch/weights/
 *.keras
 *.h5
 

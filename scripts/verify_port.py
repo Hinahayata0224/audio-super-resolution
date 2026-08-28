@@ -1,4 +1,4 @@
-"""Verify audio_decompression (PyTorch) outputs match upscalemp3_v2 (TF/Keras).
+"""Verify stage1_wavelet_unet_pytorch (PyTorch) outputs match stage1_wavelet_unet (TF/Keras).
 
 Usage:
   python verify_port.py                     # PT-only checks + weight load test
@@ -14,7 +14,8 @@ import torch
 
 PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT)
-from audio_decompression import load_model, WaveletUNet
+sys.path.insert(0, os.path.join(PROJECT, "stages"))
+from stage1_wavelet_unet_pytorch import load_model, WaveletUNet
 
 # ---------------------------------------------------------------------------
 # 1. Load PT model with weights & test forward pass
@@ -54,7 +55,7 @@ def test_pt_forward():
 def test_tf_comparison(pt_out_np):
     """Run TF model on same input, compare outputs."""
     try:
-        sys.path.insert(0, os.path.join(PROJECT, "upscalemp3_v2", "src"))
+        sys.path.insert(0, os.path.join(PROJECT, "stages", "stage1_wavelet_unet", "src"))
         import tensorflow as tf
         tf.get_logger().setLevel("ERROR")
 
@@ -67,7 +68,7 @@ def test_tf_comparison(pt_out_np):
             "GatedSkipConnection": GatedSkipConnection,
         }
 
-        keras_path = os.path.join(PROJECT, "upscalemp3_v2", "models", "model_13M.keras")
+        keras_path = os.path.join(PROJECT, "stages", "stage1_wavelet_unet", "models", "model_13M.keras")
         if not os.path.exists(keras_path):
             print("[TF] SKIP: .keras model file not found")
             return
@@ -75,7 +76,7 @@ def test_tf_comparison(pt_out_np):
         model = tf.keras.models.load_model(
             keras_path, custom_objects=custom_objects, compile=False, safe_mode=False)
         _ = model(tf.zeros((16, 44100, 1)), training=False)
-        h5_path = os.path.join(PROJECT, "upscalemp3_v2", "models", "model_13M.weights.h5")
+        h5_path = os.path.join(PROJECT, "stages", "stage1_wavelet_unet", "models", "model_13M.weights.h5")
         model.load_weights(h5_path)
 
         sr = 44100
@@ -130,7 +131,7 @@ def test_tf_comparison(pt_out_np):
 # ---------------------------------------------------------------------------
 def test_dwt_idwt_inverse(device):
     """Verify DWT + IDWT round-trip is near-identity."""
-    from audio_decompression.dwt import DWTLayer, IDWTLayer
+    from stage1_wavelet_unet_pytorch.dwt import DWTLayer, IDWTLayer
 
     dwt = DWTLayer().to(device)
     idwt = IDWTLayer().to(device)
@@ -206,13 +207,13 @@ def test_unloaded_model():
 
 # ===========================================================================
 def main():
-    parser = argparse.ArgumentParser(description="Verify audio_decompression port against upscalemp3_v2")
+    parser = argparse.ArgumentParser(description="Verify stage1_wavelet_unet_pytorch port against stage1_wavelet_unet (TF/Keras)")
     parser.add_argument("--full", action="store_true", help="Full PT vs TF comparison (needs TF)")
     parser.add_argument("--audio", action="store_true", help="Run on test_30s.wav")
     args = parser.parse_args()
 
     print("=" * 60)
-    print("  audio_decompression PORT VERIFICATION")
+    print("  stage1_wavelet_unet_pytorch PORT VERIFICATION")
     print("=" * 60)
     print()
 

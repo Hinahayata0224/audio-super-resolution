@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """
 MP3/AAC Music Restoration Pipeline
-  Stage 1: upscalemp3_v2 wavelet-based MP3 artifact removal @ 44.1kHz
+  Stage 1: stage1_wavelet_unet_pytorch wavelet-based MP3 artifact removal @ 44.1kHz
   Stage 2: AudioSR super-resolution @ 48kHz
 
 Usage:
@@ -60,8 +60,9 @@ import torch
 import torchaudio
 from audiosr import build_model, super_resolution
 
-# Ensure project root is on path
+# Ensure project root and stages/ are on path
 sys.path.insert(0, PROJECT)
+sys.path.insert(0, os.path.join(PROJECT, "stages"))
 
 
 def main():
@@ -69,7 +70,7 @@ def main():
         description="Restore compressed music (MP3/AAC) to near-lossless quality"
     )
     parser.add_argument("-i", "--input", required=True, help="Input audio file")
-    parser.add_argument("--stage1", default="upscalemp3", choices=["upscalemp3", "skip"],
+    parser.add_argument("--stage1", default="stage1", choices=["stage1", "skip"],
                         help="Stage 1 de-artifacting (skip for Stage 2 only)")
     parser.add_argument("-o", "--output", default="./output", help="Output directory")
     parser.add_argument("--model", default="basic", choices=["basic", "speech"],
@@ -154,7 +155,7 @@ def main():
     os.makedirs(temp_dir, exist_ok=True)
 
     # ================================================================
-    # Stage 1: upscalemp3_v2 MP3 Artifact Removal
+    # Stage 1: stage1_wavelet_unet MP3 Artifact Removal
     # ================================================================
 
     if args.stage1 == "skip":
@@ -164,11 +165,11 @@ def main():
         temp_path = args.input
         stage1_sr = sr
 
-    else:  # upscalemp3
-        from audio_decompression import load_model, process_audio
+    else:  # stage1
+        from stage1_wavelet_unet_pytorch import load_model, process_audio
 
         print("\n" + "=" * 60)
-        print("Stage 1: audio_decompression (Wavelet U-Net) @ 44.1kHz")
+        print("Stage 1: stage1_wavelet_unet_pytorch (Wavelet U-Net) @ 44.1kHz")
         print("=" * 60)
 
         model = load_model(device=device)
@@ -181,7 +182,7 @@ def main():
         print(f"  Stage 1 done, shape: {stage1_output.shape} @ {stage1_sr}Hz")
 
     if args.stage1 != "skip":
-        stage1_name = f"{base_name}_stage1_upscalemp3.wav"
+        stage1_name = f"{base_name}_stage1_wavelet_unet.wav"
         if args.keep_temp:
             sf.write(os.path.join(temp_dir, stage1_name), stage1_output, stage1_sr)
             print(f"  Stage 1 output saved: {temp_dir}/{stage1_name}")
