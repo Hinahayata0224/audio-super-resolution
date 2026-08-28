@@ -84,8 +84,6 @@ def main():
                         help="Keep Stage 1 intermediate file")
     parser.add_argument("--skip-loudness-match", action="store_true",
                         help="Skip loudness matching after Stage 2")
-    parser.add_argument("--no-lowpass", action="store_true",
-                        help="Bypass lowpass filter, use full-band mel conditioning")
     args = parser.parse_args()
 
     os.makedirs(args.output, exist_ok=True)
@@ -207,15 +205,6 @@ def main():
 
     audiosr_pipeline.download_checkpoint = _original_download
 
-    if args.no_lowpass:
-        _orig_make = audiosr_pipeline.make_batch_for_super_resolution
-        def _bypass_lowpass(input_file, waveform=None, fbank=None):
-            batch, duration = _orig_make(input_file, waveform, fbank)
-            batch["lowpass_mel"] = batch["log_mel_spec"]
-            return batch, duration
-        audiosr_pipeline.make_batch_for_super_resolution = _bypass_lowpass
-        print("  Lowpass: OFF (using full-band mel)")
-
     if args.stage1 == "skip":
         st1_np, st1_sr = sf.read(temp_path)
         st1_audio = torch.from_numpy(st1_np.T).float()
@@ -234,13 +223,16 @@ def main():
     step_samples = max_chunk_samples - overlap_samples
     n_channels = st1_audio.shape[0]
 
-    def process_one_channel(ch_mono, label):
+    def process_one_channel(ch_mono, label, seed_override=None):
         import time
         ch_path = os.path.join(temp_dir, f"{base_name}_{label}.wav")
         t0 = time.time()
         sf.write(ch_path, ch_mono.numpy(), 48000, subtype='FLOAT')
         t1 = time.time()
-        out = super_resolution(audiosr_model, ch_path, seed=args.seed,
+        # seed_override: CPU 并行时为每个 chunk 分配独立种子，避免全局 seed 竞争；
+        # GPU 串行时用统一种子保持可复现。
+        s = seed_override if seed_override is not None else args.seed
+        out = super_resolution(audiosr_model, ch_path, seed=s,
                                 guidance_scale=guidance_scale, ddim_steps=ddim_steps)
         t2 = time.time()
         os.remove(ch_path)
@@ -282,12 +274,16 @@ def main():
         hann_full = torch.hann_window(max_chunk_samples)
         ch_outputs = []
 
-        # P3: chunk 并行。AudioSR 的 torch CPU 推理会释放 GIL，线程池可并行；
-        # GPU 上推理本身串行，线程池仅让 I/O 与计算重叠，开销可忽略。
-        from concurrent.futures import ThreadPoolExecutor
-        import os as _os
-        workers = min(max(1, _os.cpu_count() or 1), 8)
-        print(f"  Parallel: {workers} workers")
+        # P3: chunk 并行。仅 CPU 上启用线程池（torch CPU 推理释放 GIL，可并行）；
+        # GPU 上扩散模型的 CUDA 上下文非线程安全、且显存只够一个实例，必须串行。
+        parallel = (device == "cpu")
+        if parallel:
+            from concurrent.futures import ThreadPoolExecutor
+            import os as _os
+            workers = min(max(1, _os.cpu_count() or 1), 8)
+            print(f"  Parallel (CPU): {workers} workers")
+        else:
+            print(f"  Serial (GPU): AudioSR CUDA 推理不支持并发")
 
         # 预收集所有 (ch_idx, i) 的任务，保持 overlap-add 顺序无关（累加可交换）
         tasks = []  # (ch_idx, i, start, end, ch_mono, label)
@@ -302,15 +298,17 @@ def main():
                     chunk = torch.nn.functional.pad(chunk, (0, max_chunk_samples - actual_len))
                 tasks.append((ch_idx, i, start, end, chunk.squeeze(0), f"ch{ch_idx}_blk{i}"))
 
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            # 提交并记录 future -> (ch_idx, i, start)
-            futures = {pool.submit(process_one_channel, ch_mono, label): (ch_idx, i, start)
-                       for (ch_idx, i, start, end, ch_mono, label) in tasks}
-            results = {}
-            for fut in futures:
-                ch_idx, i, start = futures[fut]
-                results[(ch_idx, i)] = fut.result()
+        if parallel:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                # 每个 chunk 分配独立种子，避免 seed_everything 的全局随机状态竞争
+                futures = {pool.submit(process_one_channel, ch_mono, label, args.seed + (ch_idx * n_chunks + i) * 7):
+                           (ch_idx, i) for (ch_idx, i, start, end, ch_mono, label) in tasks}
+                results = {key: fut.result() for fut, key in futures.items()}
             print(f"  All {len(tasks)} chunks done")
+        else:
+            results = {}
+            for (ch_idx, i, start, end, ch_mono, label) in tasks:
+                results[(ch_idx, i)] = process_one_channel(ch_mono, label)
 
         # 顺序累加（结果与串行完全一致）
         for ch_idx in range(n_channels):

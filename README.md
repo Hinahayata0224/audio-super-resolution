@@ -64,11 +64,25 @@ python scripts/restore.py -i "music.mp3" -o ./out --ddim_steps 100
 - **Stage 1 批量推理**：`stage1_wavelet_unet_pytorch` 按 1s 段切分后以
   `batch_size=8` 批量前向（`inference.py`），显著提升 Conv1D 吞吐，
   数学结果与逐段串行完全一致。
-- **Stage 2 chunk 并行**：`restore.py` 用线程池并行处理 10.24s 的音频块
-  （AudioSR 的 torch 推理会释放 GIL，多核 CPU 上可并行，默认 4-8 workers）。
-  并行不改变 overlap-add 结果。
+- **Stage 2 chunk 并行**：`restore.py` 在 CPU 上用线程池并行处理 10.24s 的音频块
+  （torch CPU 推理会释放 GIL）；**GPU 上保持串行**（AudioSR 的 CUDA 推理
+  非线程安全，并发会卡死）。并行不改变 overlap-add 结果。
 - **逐 chunk 增益对齐**：Stage 2 每个 chunk 输出按输入 RMS 归一化，
   避免 AudioSR 输出归一化导致的 chunk 边界响度跳变。
+
+## 关于 Low-pass 机制（重要）
+
+AudioSR 的 low-pass 机制是**官方设计核心**，不是可选项（论文
+[AudioSR: Versatile Audio Super-resolution at Scale](https://arxiv.org/abs/2309.07314)，
+Section 3.2）：
+
+- **Pre-processing**：输入按 0.99 roll-off 频率低通滤波（8 阶 Chebyshev），
+  得到 `lowpass_mel` 作为扩散模型的条件信号；
+- **Post-processing**：生成结果中**低于截止频率的部分被替换回原始输入的真实低频**
+  （mel 域 `mel_replace_ops` + 波形域双重替换），确保低频绝对保真。
+
+因此 `restore.py` 始终使用官方默认的 low-pass 路径，**不提供禁用选项**——
+关闭它会破坏低频保真锚点，导致模型对全频段自由生成、产生高频伪影。
 
 ## 模型下载
 
