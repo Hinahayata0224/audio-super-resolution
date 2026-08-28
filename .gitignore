@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.idea/
+
+# 模型权重（体积大，需自行从 HuggingFace 下载，见 README）
+models/audiosr/
+models/huggingface/
+audio_decompression/weights/
+*.keras
+*.h5
+
+# 输入/输出音频与中间产物
+audio/
+output/
+output_30s_stereo/
+output_clean/
+output_up/
+output_offline/
+output_verify/
+.temp/
+origin/
+*.wav
+*.mp3
+*.flac
+
+# 系统
+Thumbs.db
+.DS_Store
+desktop.ini

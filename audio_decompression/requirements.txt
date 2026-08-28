@@ -1,0 +1,5 @@
+h5py
+numpy
+PyWavelets
+torch >= 2.0
+torchaudio

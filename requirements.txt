@@ -1,0 +1,9 @@
+h5py
+librosa
+numpy
+pyloudnorm
+PyWavelets
+soundfile
+torch >= 2.0
+torchaudio
+audiosr
