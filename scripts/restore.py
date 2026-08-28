@@ -184,7 +184,7 @@ def main():
     if args.stage1 != "skip":
         stage1_name = f"{base_name}_stage1_wavelet_unet.wav"
         if args.keep_temp:
-            sf.write(os.path.join(temp_dir, stage1_name), stage1_output, stage1_sr)
+            sf.write(os.path.join(temp_dir, stage1_name), stage1_output, stage1_sr, subtype='FLOAT')
             print(f"  Stage 1 output saved: {temp_dir}/{stage1_name}")
 
     if device == "cuda":
